@@ -1,30 +1,36 @@
-import { Notice, Plugin, TFile } from 'obsidian';
+import { FileSystemAdapter, Notice, Plugin, TFile } from 'obsidian';
 import { DEFAULT_SETTINGS, SemanticSearchSettingTab } from './settings';
 import type { SemanticSearchSettings } from './settings';
-import { ChromaService } from './chromaService';
+import { VectorStore } from './search/searchEngine';
 import { SemanticSearchModal } from './components/searchModal';
 import { indexFile, indexVault, removeFile } from './search/indexer';
+import { env } from "@huggingface/transformers";
+
+const INDEX_FOLDER = '.obsidian/plugins/local-semantic-search/vector-index';
 
 export default class SemanticSearchPlugin extends Plugin {
 	settings!: SemanticSearchSettings;
-	chroma!: ChromaService;
+	store!: VectorStore;
 
 	async onload(): Promise<void> {
-		await this.loadSettings();
-		this.chroma = new ChromaService(this.settings);
+		const basePath = (this.app.vault.adapter as FileSystemAdapter).getBasePath();
 
-		// ── Ribbon icon ────────────────────────────────────────────────────────
+		await this.loadTransformersSettings(basePath);
+		await this.loadSettings();
+
+		this.store = new VectorStore(`${basePath}/${INDEX_FOLDER}`);
+		await this.store.initialize();
+
 		this.addRibbonIcon('search', 'Semantic Search', () => {
-			new SemanticSearchModal(this.app, this.chroma, this.settings).open();
+			new SemanticSearchModal(this.app, this.store, this.settings).open();
 		});
 
-		// ── Commands ───────────────────────────────────────────────────────────
 		this.addCommand({
 			id: 'semantic-search-open',
 			name: 'Open semantic search',
 			hotkeys: [{ modifiers: ['Mod', 'Shift'], key: 'o' }],
 			callback: () => {
-				new SemanticSearchModal(this.app, this.chroma, this.settings).open();
+				new SemanticSearchModal(this.app, this.store, this.settings).open();
 			},
 		});
 
@@ -33,8 +39,7 @@ export default class SemanticSearchPlugin extends Plugin {
 			name: 'Index entire vault',
 			callback: async () => {
 				try {
-					await this.chroma.ensureCollection();
-					await indexVault(this.app, this.chroma, this.settings);
+					await indexVault(this.app, this.store, this.settings);
 				} catch (err) {
 					new Notice(`Semantic Search: ${String(err)}`);
 					console.error('Semantic Search index-vault error:', err);
@@ -57,14 +62,10 @@ export default class SemanticSearchPlugin extends Plugin {
 
 		this.addCommand({
 			id: 'semantic-search-clear-index',
-			name: 'Clear index (delete collection)',
+			name: 'Clear index',
 			callback: async () => {
-				try {
-					await this.chroma.deleteCollection();
-					new Notice('Semantic Search: index cleared.');
-				} catch (err) {
-					new Notice(`Semantic Search: ${String(err)}`);
-				}
+				await this.store.clear();
+				new Notice('Semantic Search: index cleared.');
 			},
 		});
 
@@ -72,13 +73,8 @@ export default class SemanticSearchPlugin extends Plugin {
 			id: 'semantic-search-show-count',
 			name: 'Show indexed chunk count',
 			callback: async () => {
-				try {
-					await this.chroma.ensureCollection();
-					const count = await this.chroma.count();
-					new Notice(`Semantic Search: ${count} chunk${count === 1 ? '' : 's'} indexed.`);
-				} catch (err) {
-					new Notice(`Semantic Search: ${String(err)}`);
-				}
+				const count = await this.store.count();
+				new Notice(`Semantic Search: ${count} chunk${count === 1 ? '' : 's'} indexed.`);
 			},
 		});
 
@@ -95,37 +91,24 @@ export default class SemanticSearchPlugin extends Plugin {
 		this.registerEvent(
 			this.app.vault.on('delete', async (file) => {
 				if (!(file instanceof TFile) || file.extension !== 'md') return;
-				try {
-					await this.chroma.ensureCollection();
-					await removeFile(file.path, this.chroma);
-				} catch (err) {
-					console.error('Semantic Search: failed to remove deleted file from index', err);
-				}
+				await removeFile(file.path, this.store);
 			})
 		);
 
 		this.registerEvent(
 			this.app.vault.on('rename', async (file, oldPath) => {
 				if (!(file instanceof TFile) || file.extension !== 'md') return;
-				try {
-					await this.chroma.ensureCollection();
-					await removeFile(oldPath, this.chroma);
-					if (this.settings.autoIndexOnSave) {
-						await indexFile(file, this.app, this.chroma, this.settings);
-					}
-				} catch (err) {
-					console.error('Semantic Search: failed to handle rename in index', err);
+				await removeFile(oldPath, this.store);
+				if (this.settings.autoIndexOnSave) {
+					await indexFile(file, this.app, this.store, this.settings);
 				}
 			})
 		);
 
-		// ── Settings tab ───────────────────────────────────────────────────────
 		this.addSettingTab(new SemanticSearchSettingTab(this.app, this));
 	}
 
-	onunload(): void {
-		// Nothing to clean up — ChromaService holds no persistent connections
-	}
+	onunload(): void {}
 
 	async loadSettings(): Promise<void> {
 		this.settings = Object.assign(
@@ -137,8 +120,6 @@ export default class SemanticSearchPlugin extends Plugin {
 
 	async saveSettings(): Promise<void> {
 		await this.saveData(this.settings);
-		// Recreate the ChromaService in case the URL or collection name changed
-		this.chroma = new ChromaService(this.settings);
 	}
 
 	// ---------------------------------------------------------------------------
@@ -147,12 +128,19 @@ export default class SemanticSearchPlugin extends Plugin {
 
 	private async indexSingleFile(file: TFile): Promise<void> {
 		try {
-			await this.chroma.ensureCollection();
-			await indexFile(file, this.app, this.chroma, this.settings);
+			await indexFile(file, this.app, this.store, this.settings);
 			new Notice(`Semantic Search: indexed "${file.basename}"`, 2000);
 		} catch (err) {
 			new Notice(`Semantic Search: failed to index "${file.basename}" — ${String(err)}`);
 			console.error('Semantic Search indexFile error:', err);
 		}
+	}
+	
+	async loadTransformersSettings(basePath: string): Promise<void> {
+		env.localModelPath = basePath + "/.model-cache/";
+		env.allowRemoteModels = true;
+		env.allowLocalModels = true;
+
+		env.useBrowserCache = false;
 	}
 }

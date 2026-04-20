@@ -3,8 +3,6 @@ import { EmbeddingProvider } from './types';
 import type SemanticSearchPlugin from './main';
 
 export interface SemanticSearchSettings {
-	chromaUrl: string;
-	collectionName: string;
 	embeddingProvider: EmbeddingProvider;
 	embeddingUrl: string;
 	embeddingModel: string;
@@ -17,11 +15,9 @@ export interface SemanticSearchSettings {
 }
 
 export const DEFAULT_SETTINGS: SemanticSearchSettings = {
-	chromaUrl: 'http://localhost:8000',
-	collectionName: 'obsidian-vault',
-	embeddingProvider: 'ollama',
+	embeddingProvider: 'transformers',
 	embeddingUrl: 'http://localhost:11434',
-	embeddingModel: 'nomic-embed-text',
+	embeddingModel: 'sentence-transformers/all-MiniLM-L6-v2',
 	apiKey: '',
 	chunkSize: 1000,
 	chunkOverlap: 100,
@@ -44,45 +40,15 @@ export class SemanticSearchSettingTab extends PluginSettingTab {
 
 		containerEl.createEl('h2', { text: 'Semantic Search Settings' });
 
-		// --- ChromaDB ---
-		containerEl.createEl('h3', { text: 'ChromaDB' });
-
-		new Setting(containerEl)
-			.setName('ChromaDB URL')
-			.setDesc('URL of the running ChromaDB server (e.g. http://localhost:8000)')
-			.addText(text =>
-				text
-					.setPlaceholder('http://localhost:8000')
-					.setValue(this.plugin.settings.chromaUrl)
-					.onChange(async value => {
-						this.plugin.settings.chromaUrl = value.trim();
-						await this.plugin.saveSettings();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName('Collection name')
-			.setDesc('Name of the ChromaDB collection used to store vault embeddings')
-			.addText(text =>
-				text
-					.setPlaceholder('obsidian-vault')
-					.setValue(this.plugin.settings.collectionName)
-					.onChange(async value => {
-						this.plugin.settings.collectionName = value.trim();
-						await this.plugin.saveSettings();
-					})
-			);
-
 		// --- Embeddings ---
 		containerEl.createEl('h3', { text: 'Embeddings' });
 
 		new Setting(containerEl)
 			.setName('Embedding provider')
-			.setDesc('How to generate embeddings. Ollama uses /api/embed; OpenAI-compatible uses /v1/embeddings.')
+			.setDesc('How to generate embeddings.')
 			.addDropdown(drop =>
 				drop
-					.addOption('ollama', 'Ollama')
-					.addOption('openai-compatible', 'OpenAI-compatible API')
+					.addOption('transformers', 'Tramsformers JS (local, no API key required)')
 					.setValue(this.plugin.settings.embeddingProvider)
 					.onChange(async (value: string) => {
 						this.plugin.settings.embeddingProvider = value as EmbeddingProvider;
@@ -114,7 +80,7 @@ export class SemanticSearchSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Embedding model')
-			.setDesc('Model name to use for embeddings (e.g. nomic-embed-text, mxbai-embed-large, text-embedding-3-small)')
+			.setDesc('Model name to use for embeddings (e.g. nomic-embed-text, mxbai-embed-large)')
 			.addText(text =>
 				text
 					.setPlaceholder('nomic-embed-text')

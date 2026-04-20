@@ -1,51 +1,38 @@
 import { App, Notice, TFile } from 'obsidian';
 import { getBatchEmbeddings } from './embeddingClient';
-import { ChromaService } from './chromaService';
+import { VectorStore } from './searchEngine';
 import type { Chunk } from '../types';
 import type { SemanticSearchSettings } from '../settings';
 
-const BATCH_SIZE = 10; // Number of chunks to embed at once
+const BATCH_SIZE = 10;
 
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
-/**
- * Index a single file: remove existing chunks, re-chunk, embed, and store.
- */
 export async function indexFile(
 	file: TFile,
 	app: App,
-	chroma: ChromaService,
+	store: VectorStore,
 	settings: SemanticSearchSettings
 ): Promise<void> {
 	const content = await app.vault.read(file);
 	const chunks = chunkText(file.path, file.basename, content, settings);
 
-	// Remove old chunks for this file (if any)
-	await chroma.deleteByFilePath(file.path);
+	await store.deleteByFilePath(file.path);
 
 	if (chunks.length === 0) return;
 
-	await embedAndStore(chunks, chroma, settings);
+	await embedAndStore(chunks, store, settings);
 }
 
-/**
- * Remove a file's chunks from the index.
- */
-export async function removeFile(
-	filePath: string,
-	chroma: ChromaService
-): Promise<void> {
-	await chroma.deleteByFilePath(filePath);
+export async function removeFile(filePath: string, store: VectorStore): Promise<void> {
+	await store.deleteByFilePath(filePath);
 }
 
-/**
- * Index all markdown files in the vault, showing progress via Notice.
- */
 export async function indexVault(
 	app: App,
-	chroma: ChromaService,
+	store: VectorStore,
 	settings: SemanticSearchSettings
 ): Promise<void> {
 	const excludedFolders = settings.excludedFolders
@@ -69,15 +56,13 @@ export async function indexVault(
 
 	for (const file of files) {
 		try {
-			await indexFile(file, app, chroma, settings);
+			await indexFile(file, app, store, settings);
 			indexed++;
 		} catch (err) {
 			console.error(`Semantic Search: failed to index ${file.path}`, err);
 			failed++;
 		}
-		notice.setMessage(
-			`Semantic Search: indexing ${indexed} / ${files.length} files…`
-		);
+		notice.setMessage(`Semantic Search: indexing ${indexed} / ${files.length} files…`);
 	}
 
 	notice.hide();
@@ -92,11 +77,6 @@ export async function indexVault(
 // Chunking
 // ---------------------------------------------------------------------------
 
-/**
- * Split note content into overlapping text chunks.
- * Strategy: split by paragraphs, merge until chunkSize is reached, then
- * carry over the last `chunkOverlap` characters into the next chunk.
- */
 export function chunkText(
 	filePath: string,
 	title: string,
@@ -105,7 +85,6 @@ export function chunkText(
 ): Chunk[] {
 	const { chunkSize, chunkOverlap } = settings;
 
-	// Strip YAML front-matter
 	const cleaned = text.replace(/^---[\s\S]*?---\n?/, '').trim();
 	if (!cleaned) return [];
 
@@ -118,18 +97,11 @@ export function chunkText(
 	const flush = () => {
 		const trimmed = buffer.trim();
 		if (trimmed.length === 0) return;
-		chunks.push({
-			id: `${filePath}::${chunkIndex}`,
-			text: trimmed,
-			filePath,
-			title,
-			chunkIndex,
-		});
+		chunks.push({ id: `${filePath}::${chunkIndex}`, text: trimmed, filePath, title, chunkIndex });
 		chunkIndex++;
 	};
 
 	for (const para of paragraphs) {
-		// If a single paragraph exceeds chunkSize, split it by sentences
 		if (para.length > chunkSize) {
 			if (buffer.length > 0) {
 				flush();
@@ -147,7 +119,6 @@ export function chunkText(
 			continue;
 		}
 
-		// Normal paragraph: add to buffer
 		if (buffer.length + para.length + 2 > chunkSize && buffer.length > 0) {
 			flush();
 			buffer = buffer.slice(-chunkOverlap) + '\n\n' + para;
@@ -156,14 +127,11 @@ export function chunkText(
 		}
 	}
 
-	if (buffer.trim().length > 0) {
-		flush();
-	}
+	if (buffer.trim().length > 0) flush();
 
 	return chunks;
 }
 
-/** Naive sentence splitter — splits on '. ', '! ', '? ' */
 function splitSentences(text: string): string[] {
 	return text
 		.split(/(?<=[.!?])\s+/)
@@ -177,20 +145,18 @@ function splitSentences(text: string): string[] {
 
 async function embedAndStore(
 	chunks: Chunk[],
-	chroma: ChromaService,
+	store: VectorStore,
 	settings: SemanticSearchSettings
 ): Promise<void> {
-	// Process in batches to avoid huge payloads
 	for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
 		const batch = chunks.slice(i, i + BATCH_SIZE);
-		const texts = batch.map(c => c.text);
-		const embeddings = await getBatchEmbeddings(texts, settings);
+		const embeddings = await getBatchEmbeddings(batch.map(c => c.text), settings);
 
-		await chroma.upsert(
-			batch.map(c => c.id),
-			embeddings,
-			batch.map(c => c.text),
-			batch.map(c => ({
+		await store.upsert(
+			batch.map((c, j) => ({
+				id: c.id,
+				embedding: embeddings[j] as number[],
+				text: c.text,
 				filePath: c.filePath,
 				title: c.title,
 				chunkIndex: c.chunkIndex,

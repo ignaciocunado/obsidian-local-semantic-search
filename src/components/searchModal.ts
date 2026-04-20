@@ -1,6 +1,6 @@
 import { App, Modal, Notice, TFile } from 'obsidian';
-import { getEmbedding } from './embeddingClient';
-import { ChromaService } from './chromaService';
+import { getEmbedding } from '../search/embeddingClient';
+import { VectorStore } from '../search/searchEngine';
 import type { SearchResult } from '../types';
 import type { SemanticSearchSettings } from '../settings';
 
@@ -9,7 +9,7 @@ const EXCERPT_LENGTH = 180;
 
 export class SemanticSearchModal extends Modal {
 	private settings: SemanticSearchSettings;
-	private chroma: ChromaService;
+	private store: VectorStore;
 
 	private inputEl!: HTMLInputElement;
 	private resultsEl!: HTMLDivElement;
@@ -20,9 +20,9 @@ export class SemanticSearchModal extends Modal {
 	private results: SearchResult[] = [];
 	private selectedIndex = 0;
 
-	constructor(app: App, chroma: ChromaService, settings: SemanticSearchSettings) {
+	constructor(app: App, store: VectorStore, settings: SemanticSearchSettings) {
 		super(app);
-		this.chroma = chroma;
+		this.store = store;
 		this.settings = settings;
 	}
 
@@ -110,9 +110,19 @@ export class SemanticSearchModal extends Modal {
 
 		try {
 			const embedding = await getEmbedding(query, this.settings);
-			const response = await this.chroma.query(embedding, this.settings.maxResults);
+			const hits = await this.store.query(embedding, this.settings.maxResults);
 
-			this.results = this.parseResults(response);
+			this.results = hits.map(h => ({
+				id: h.id,
+				filePath: h.filePath,
+				title: h.title,
+				excerpt: h.text.length > EXCERPT_LENGTH
+					? h.text.slice(0, EXCERPT_LENGTH).replace(/\s+$/, '') + '…'
+					: h.text,
+				score: h.score,
+				chunkIndex: h.chunkIndex,
+			}));
+
 			this.renderResults();
 		} catch (err) {
 			console.error('Semantic Search error:', err);
@@ -121,38 +131,6 @@ export class SemanticSearchModal extends Modal {
 		} finally {
 			this.spinnerEl.style.display = 'none';
 		}
-	}
-
-	private parseResults(response: {
-		ids: string[][];
-		documents: (string | null)[][];
-		metadatas: (Record<string, string | number> | null)[][];
-		distances: number[][];
-	}): SearchResult[] {
-		const ids = response.ids[0] ?? [];
-		const docs = response.documents[0] ?? [];
-		const metas = response.metadatas[0] ?? [];
-		const dists = response.distances[0] ?? [];
-
-		return ids.map((id, i) => {
-			const meta = metas[i] ?? {};
-			const filePath = String(meta['filePath'] ?? '');
-			const title = String(meta['title'] ?? filePath);
-			const chunkIndex = Number(meta['chunkIndex'] ?? 0);
-			const rawText = docs[i] ?? '';
-			const distance = dists[i] ?? 1;
-
-			// ChromaDB returns L2 or cosine distance — convert to a 0-1 similarity
-			// For cosine distance (0-2 range): similarity = 1 - distance/2
-			// For L2 distance: we normalise heuristically
-			const score = Math.max(0, Math.min(1, 1 - distance / 2));
-
-			const excerpt = rawText.length > EXCERPT_LENGTH
-				? rawText.slice(0, EXCERPT_LENGTH).trimEnd() + '…'
-				: rawText;
-
-			return { id, filePath, title, excerpt, score, chunkIndex };
-		});
 	}
 
 	// ---------------------------------------------------------------------------
@@ -228,7 +206,7 @@ export class SemanticSearchModal extends Modal {
 }
 
 // ---------------------------------------------------------------------------
-// Inline SVGs (no external assets needed)
+// Inline SVGs
 // ---------------------------------------------------------------------------
 
 const SEARCH_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"

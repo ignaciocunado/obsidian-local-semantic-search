@@ -4,7 +4,8 @@
 	"version": "1.0.0",
 	"minAppVersion": "0.15.0",
 	"description": "Semantic search for your vault",
-	"author": "Ignacio Cuñado",
-	"authorUrl": "",
+	"author": "Ignacio Cuñado Barral",
+	"authorUrl": "https://ignaciocunado.com",
 	"isDesktopOnly": true
+
 }

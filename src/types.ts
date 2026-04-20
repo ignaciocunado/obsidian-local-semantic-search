@@ -1,3 +1,5 @@
+export type EmbeddingProvider = 'transformers' | 'ollama' | 'openai-compatible';
+
 export interface SearchResult {
 	id: string;
 	filePath: string;
@@ -14,23 +16,3 @@ export interface Chunk {
 	title: string;
 	chunkIndex: number;
 }
-
-export interface ChromaCollection {
-	id: string;
-	name: string;
-}
-
-export interface ChromaQueryResponse {
-	ids: string[][];
-	documents: (string | null)[][];
-	metadatas: (Record<string, string | number> | null)[][];
-	distances: number[][];
-}
-
-export interface ChromaGetResponse {
-	ids: string[];
-	documents: (string | null)[];
-	metadatas: (Record<string, string | number> | null)[];
-}
-
-export type EmbeddingProvider = 'ollama' | 'openai-compatible';
