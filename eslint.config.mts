@@ -22,6 +22,13 @@ export default tseslint.config(
 		},
 	},
 	...obsidianmd.configs.recommended,
+	{
+		// node:test's `test()` returns a promise the runner tracks itself.
+		files: ["tests/**/*.ts"],
+		rules: {
+			"@typescript-eslint/no-floating-promises": "off",
+		},
+	},
 	globalIgnores([
 		"node_modules",
 		"dist",

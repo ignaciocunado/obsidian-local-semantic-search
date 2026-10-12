@@ -1,13 +1,17 @@
 /* ============================================================
-   Semantic Search Modal
+   Semantic search modal
    ============================================================ */
 
 .semantic-search-modal {
 	padding: 0;
 	border-radius: var(--radius-l);
 	overflow: hidden;
-	max-width: 680px;
+	max-width: 700px;
 	width: 90vw;
+}
+
+.semantic-search-modal .modal-close-button {
+	display: none;
 }
 
 .semantic-search-modal .modal-content {
@@ -22,10 +26,9 @@
 .semantic-search-input-row {
 	display: flex;
 	align-items: center;
-	gap: 8px;
-	padding: 12px 16px;
+	gap: var(--size-4-2);
+	padding: var(--size-4-3) var(--size-4-4);
 	border-bottom: 1px solid var(--background-modifier-border);
-	background: var(--background-primary);
 	flex-shrink: 0;
 }
 
@@ -36,15 +39,19 @@
 	flex-shrink: 0;
 }
 
-.semantic-search-input {
+/* Beat Obsidian's input[type="text"] hover/focus styles so the field sits flush, like the quick switcher. */
+.semantic-search-input-row input.semantic-search-input,
+.semantic-search-input-row input.semantic-search-input:hover,
+.semantic-search-input-row input.semantic-search-input:focus,
+.semantic-search-input-row input.semantic-search-input:focus-visible {
 	flex: 1;
 	background: transparent;
 	border: none;
 	outline: none;
+	box-shadow: none;
 	font-size: var(--font-ui-medium);
 	color: var(--text-normal);
 	padding: 0;
-	box-shadow: none !important;
 }
 
 .semantic-search-input::placeholder {
@@ -52,26 +59,32 @@
 }
 
 .semantic-search-spinner {
-	color: var(--text-muted);
-	display: flex;
-	align-items: center;
+	width: 14px;
+	height: 14px;
 	flex-shrink: 0;
+	border-radius: 50%;
+	border: 2px solid var(--background-modifier-border);
+	border-top-color: var(--text-muted);
+	visibility: hidden;
 }
 
-/* Rotation animation for the spinner SVG */
-.semantic-search-spin {
-	animation: semantic-search-rotate 1s linear infinite;
+.semantic-search-spinner.is-active {
+	visibility: visible;
+	animation: semantic-search-rotate 0.8s linear infinite;
 }
 
 @keyframes semantic-search-rotate {
-	from { transform: rotate(0deg); }
-	to   { transform: rotate(360deg); }
+	to { transform: rotate(360deg); }
 }
 
-/* ── Status bar ────────────────────────────────────────────── */
+/* ── Status ────────────────────────────────────────────────── */
 
 .semantic-search-status {
-	padding: 4px 16px;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--size-4-2);
+	padding: var(--size-4-2) var(--size-4-4);
 	font-size: var(--font-ui-smaller);
 	color: var(--text-muted);
 	background: var(--background-secondary);
@@ -79,26 +92,40 @@
 	flex-shrink: 0;
 }
 
-/* ── Results list ──────────────────────────────────────────── */
+.semantic-search-status.is-hidden {
+	display: none;
+}
+
+.semantic-search-status button {
+	font-size: var(--font-ui-smaller);
+	padding: var(--size-2-1) var(--size-4-2);
+	height: auto;
+}
+
+/* ── Results ───────────────────────────────────────────────── */
 
 .semantic-search-results {
 	overflow-y: auto;
 	flex: 1;
-	background: var(--background-primary);
+	padding: var(--size-2-2) var(--size-4-2);
+}
+
+.semantic-search-results:empty {
+	display: none;
+}
+
+.semantic-search-empty {
+	padding: var(--size-4-3) var(--size-4-2);
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
 }
 
 .semantic-search-result {
-	padding: 10px 16px;
-	cursor: pointer;
-	border-bottom: 1px solid var(--background-modifier-border-hover);
-	transition: background 80ms ease;
+	padding: var(--size-4-2) var(--size-4-3);
+	border-radius: var(--radius-s);
+	cursor: var(--cursor);
 }
 
-.semantic-search-result:last-child {
-	border-bottom: none;
-}
-
-.semantic-search-result:hover,
 .semantic-search-result.is-selected {
 	background: var(--background-modifier-hover);
 }
@@ -107,13 +134,11 @@
 	display: flex;
 	justify-content: space-between;
 	align-items: baseline;
-	margin-bottom: 2px;
-	gap: 8px;
+	gap: var(--size-4-2);
 }
 
 .semantic-search-result-title {
-	font-weight: 600;
-	font-size: var(--font-ui-medium);
+	font-weight: var(--font-semibold);
 	color: var(--text-normal);
 	white-space: nowrap;
 	overflow: hidden;
@@ -122,8 +147,7 @@
 
 .semantic-search-result-score {
 	font-size: var(--font-ui-smaller);
-	color: var(--color-green);
-	font-weight: 500;
+	color: var(--text-faint);
 	flex-shrink: 0;
 	font-variant-numeric: tabular-nums;
 }
@@ -131,18 +155,38 @@
 .semantic-search-result-path {
 	font-size: var(--font-ui-smaller);
 	color: var(--text-faint);
-	margin-bottom: 4px;
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
 
 .semantic-search-result-excerpt {
+	margin-top: var(--size-2-1);
 	font-size: var(--font-ui-small);
 	color: var(--text-muted);
-	line-height: 1.5;
+	line-height: var(--line-height-tight);
 	display: -webkit-box;
-	-webkit-line-clamp: 2;
+	-webkit-line-clamp: 3;
 	-webkit-box-orient: vertical;
 	overflow: hidden;
+}
+
+.semantic-search-result-excerpt mark {
+	background: var(--text-highlight-bg);
+	color: var(--text-normal);
+}
+
+.semantic-search-modal .prompt-instructions {
+	flex-shrink: 0;
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+/* ── Status bar ────────────────────────────────────────────── */
+
+.semantic-search-status-bar.is-hidden {
+	display: none;
+}
+
+.semantic-search-status-bar.mod-error {
+	color: var(--text-error);
 }

@@ -1,182 +1,68 @@
-import { App, PluginSettingTab, Setting } from 'obsidian';
-import { EmbeddingProvider } from './types';
-import type SemanticSearchPlugin from './main';
+import { normalizePath } from 'obsidian';
+import { DEFAULT_MODEL_ID } from './embedding/models';
 
 export interface SemanticSearchSettings {
-	embeddingProvider: EmbeddingProvider;
-	embeddingUrl: string;
-	embeddingModel: string;
-	apiKey: string;
+	/** Hugging Face model id, one of MODEL_PRESETS or a custom Transformers.js-compatible model. */
+	modelId: string;
+	/** Keep the index up to date in the background once it has been built. */
+	autoIndex: boolean;
+	/** Folders (and everything below them) that are never indexed. */
+	excludedFolders: string[];
+	/** Maximum characters per indexed passage. */
 	chunkSize: number;
+	/** Characters of context repeated between consecutive passages. */
 	chunkOverlap: number;
 	maxResults: number;
-	autoIndexOnSave: boolean;
-	excludedFolders: string;
+	showScores: boolean;
 }
 
 export const DEFAULT_SETTINGS: SemanticSearchSettings = {
-	embeddingProvider: 'transformers',
-	embeddingUrl: 'http://localhost:11434',
-	embeddingModel: 'sentence-transformers/all-MiniLM-L6-v2',
-	apiKey: '',
+	modelId: DEFAULT_MODEL_ID,
+	autoIndex: true,
+	excludedFolders: [],
 	chunkSize: 1000,
 	chunkOverlap: 100,
 	maxResults: 10,
-	autoIndexOnSave: false,
-	excludedFolders: '',
+	showScores: false,
 };
 
-export class SemanticSearchSettingTab extends PluginSettingTab {
-	plugin: SemanticSearchPlugin;
+export const CHUNK_SIZE_LIMITS = { min: 200, max: 2000, step: 100 } as const;
+export const CHUNK_OVERLAP_LIMITS = { min: 0, max: 400, step: 50 } as const;
+export const MAX_RESULTS_LIMITS = { min: 3, max: 50, step: 1 } as const;
 
-	constructor(app: App, plugin: SemanticSearchPlugin) {
-		super(app, plugin);
-		this.plugin = plugin;
+/** Merge saved data over the defaults, dropping unknown keys and invalid values. */
+export function normalizeSettings(saved: unknown): SemanticSearchSettings {
+	const data = (typeof saved === 'object' && saved !== null ? saved : {}) as Record<string, unknown>;
+	const settings: SemanticSearchSettings = { ...DEFAULT_SETTINGS, excludedFolders: [] };
+
+	if (typeof data.modelId === 'string' && data.modelId.trim()) settings.modelId = data.modelId.trim();
+	if (typeof data.autoIndex === 'boolean') settings.autoIndex = data.autoIndex;
+	if (typeof data.showScores === 'boolean') settings.showScores = data.showScores;
+	if (Array.isArray(data.excludedFolders)) {
+		settings.excludedFolders = parseFolderList(data.excludedFolders.filter(f => typeof f === 'string').join('\n'));
 	}
+	settings.chunkSize = clampNumber(data.chunkSize, CHUNK_SIZE_LIMITS, DEFAULT_SETTINGS.chunkSize);
+	settings.chunkOverlap = clampNumber(data.chunkOverlap, CHUNK_OVERLAP_LIMITS, DEFAULT_SETTINGS.chunkOverlap);
+	settings.maxResults = clampNumber(data.maxResults, MAX_RESULTS_LIMITS, DEFAULT_SETTINGS.maxResults);
+	return settings;
+}
 
-	display(): void {
-		const { containerEl } = this;
-		containerEl.empty();
+/** Parse one folder per line (commas are accepted too), normalized and de-duplicated. */
+export function parseFolderList(text: string): string[] {
+	const folders = text
+		.split(/[\n,]/)
+		.map(f => f.trim())
+		.filter(f => f.length > 0)
+		.map(f => normalizePath(f))
+		.filter(f => f !== '/' && f.length > 0);
+	return [...new Set(folders)];
+}
 
-		containerEl.createEl('h2', { text: 'Semantic Search Settings' });
+export function isExcluded(path: string, excludedFolders: string[]): boolean {
+	return excludedFolders.some(folder => path === folder || path.startsWith(folder + '/'));
+}
 
-		// --- Embeddings ---
-		containerEl.createEl('h3', { text: 'Embeddings' });
-
-		new Setting(containerEl)
-			.setName('Embedding provider')
-			.setDesc('How to generate embeddings.')
-			.addDropdown(drop =>
-				drop
-					.addOption('transformers', 'Tramsformers JS (local, no API key required)')
-					.setValue(this.plugin.settings.embeddingProvider)
-					.onChange(async (value: string) => {
-						this.plugin.settings.embeddingProvider = value as EmbeddingProvider;
-						await this.plugin.saveSettings();
-						this.display();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName('Embedding server URL')
-			.setDesc(
-				this.plugin.settings.embeddingProvider === 'ollama'
-					? 'Ollama base URL (e.g. http://localhost:11434)'
-					: 'Base URL of the OpenAI-compatible server (e.g. http://localhost:1234)'
-			)
-			.addText(text =>
-				text
-					.setPlaceholder(
-						this.plugin.settings.embeddingProvider === 'ollama'
-							? 'http://localhost:11434'
-							: 'http://localhost:1234'
-					)
-					.setValue(this.plugin.settings.embeddingUrl)
-					.onChange(async value => {
-						this.plugin.settings.embeddingUrl = value.trim();
-						await this.plugin.saveSettings();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName('Embedding model')
-			.setDesc('Model name to use for embeddings (e.g. nomic-embed-text, mxbai-embed-large)')
-			.addText(text =>
-				text
-					.setPlaceholder('nomic-embed-text')
-					.setValue(this.plugin.settings.embeddingModel)
-					.onChange(async value => {
-						this.plugin.settings.embeddingModel = value.trim();
-						await this.plugin.saveSettings();
-					})
-			);
-
-		if (this.plugin.settings.embeddingProvider === 'openai-compatible') {
-			new Setting(containerEl)
-				.setName('API key')
-				.setDesc('API key for the embedding server (leave empty if not required)')
-				.addText(text =>
-					text
-						.setPlaceholder('sk-...')
-						.setValue(this.plugin.settings.apiKey)
-						.onChange(async value => {
-							this.plugin.settings.apiKey = value.trim();
-							await this.plugin.saveSettings();
-						})
-				);
-		}
-
-		// --- Indexing ---
-		containerEl.createEl('h3', { text: 'Indexing' });
-
-		new Setting(containerEl)
-			.setName('Chunk size')
-			.setDesc('Maximum number of characters per text chunk')
-			.addSlider(slider =>
-				slider
-					.setLimits(200, 4000, 100)
-					.setValue(this.plugin.settings.chunkSize)
-					.setDynamicTooltip()
-					.onChange(async value => {
-						this.plugin.settings.chunkSize = value;
-						await this.plugin.saveSettings();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName('Chunk overlap')
-			.setDesc('Number of characters of overlap between consecutive chunks')
-			.addSlider(slider =>
-				slider
-					.setLimits(0, 500, 50)
-					.setValue(this.plugin.settings.chunkOverlap)
-					.setDynamicTooltip()
-					.onChange(async value => {
-						this.plugin.settings.chunkOverlap = value;
-						await this.plugin.saveSettings();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName('Excluded folders')
-			.setDesc('Comma-separated list of folder paths to exclude from indexing (e.g. Templates,Attachments)')
-			.addText(text =>
-				text
-					.setPlaceholder('Templates,Attachments')
-					.setValue(this.plugin.settings.excludedFolders)
-					.onChange(async value => {
-						this.plugin.settings.excludedFolders = value;
-						await this.plugin.saveSettings();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName('Auto-index on save')
-			.setDesc('Automatically re-index a note when it is saved')
-			.addToggle(toggle =>
-				toggle
-					.setValue(this.plugin.settings.autoIndexOnSave)
-					.onChange(async value => {
-						this.plugin.settings.autoIndexOnSave = value;
-						await this.plugin.saveSettings();
-					})
-			);
-
-		// --- Search ---
-		containerEl.createEl('h3', { text: 'Search' });
-
-		new Setting(containerEl)
-			.setName('Max results')
-			.setDesc('Maximum number of search results to display')
-			.addSlider(slider =>
-				slider
-					.setLimits(3, 50, 1)
-					.setValue(this.plugin.settings.maxResults)
-					.setDynamicTooltip()
-					.onChange(async value => {
-						this.plugin.settings.maxResults = value;
-						await this.plugin.saveSettings();
-					})
-			);
-	}
+function clampNumber(value: unknown, limits: { min: number; max: number }, fallback: number): number {
+	if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+	return Math.min(limits.max, Math.max(limits.min, Math.round(value)));
 }

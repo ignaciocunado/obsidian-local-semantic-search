@@ -2,10 +2,9 @@
 	"id": "local-semantic-search",
 	"name": "Local Semantic Search",
 	"version": "1.0.0",
-	"minAppVersion": "0.15.0",
-	"description": "Semantic search for your vault",
+	"minAppVersion": "1.1.0",
+	"description": "Search your notes by meaning with a small embedding model that runs entirely on your device.",
 	"author": "Ignacio Cuñado Barral",
 	"authorUrl": "https://ignaciocunado.com",
 	"isDesktopOnly": true
-
 }

@@ -1,20 +1,21 @@
 {
 	"name": "local-semantic-search",
 	"version": "1.0.0",
-	"description": "An Obsidian plugin for local semantic search using various embedding providers.",
+	"description": "Local semantic search for Obsidian notes, powered by a small embedding model that runs on your device.",
 	"main": "main.js",
 	"type": "module",
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+		"test": "node scripts/run-tests.mjs",
 		"version": "node version-bump.mjs && git add manifest.json versions.json",
 		"lint": "eslint ."
 	},
 	"keywords": [],
-	"license": "0-BSD",
+	"license": "GPL-3.0-only",
 	"devDependencies": {
 		"@eslint/js": "9.30.1",
-		"@types/node": "^16.11.6",
+		"@types/node": "^20.19.43",
 		"esbuild": "0.25.5",
 		"eslint-plugin-obsidianmd": "0.1.9",
 		"globals": "14.0.0",
@@ -24,8 +25,7 @@
 		"typescript-eslint": "8.35.1"
 	},
 	"dependencies": {
-		"@huggingface/transformers": "^3.8.1",
-		"obsidian": "latest",
-		"vectra": "^0.14.0"
+		"@huggingface/transformers": "3.8.1",
+		"obsidian": "latest"
 	}
 }
