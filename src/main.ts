@@ -1,146 +1,68 @@
-import { FileSystemAdapter, Notice, Plugin, TFile } from 'obsidian';
-import { DEFAULT_SETTINGS, SemanticSearchSettingTab } from './settings';
+import { Plugin } from 'obsidian';
+import { normalizeSettings } from './settings';
 import type { SemanticSearchSettings } from './settings';
-import { VectorStore } from './search/searchEngine';
-import { SemanticSearchModal } from './components/searchModal';
-import { indexFile, indexVault, removeFile } from './search/indexer';
-import { env } from "@huggingface/transformers";
-
-const INDEX_FOLDER = '.obsidian/plugins/local-semantic-search/vector-index';
+import { IndexManager } from './index/indexManager';
+import { registerCommands } from './commands';
+import { SemanticSearchModal } from './ui/searchModal';
+import { SemanticSearchSettingTab } from './ui/settingsTab';
+import { describeStatus } from './ui/statusText';
 
 export default class SemanticSearchPlugin extends Plugin {
 	settings!: SemanticSearchSettings;
-	store!: VectorStore;
+	index!: IndexManager;
 
 	async onload(): Promise<void> {
-		const basePath = (this.app.vault.adapter as FileSystemAdapter).getBasePath();
+		this.settings = normalizeSettings(await this.loadData());
+		this.index = new IndexManager(this.app, () => this.settings, this.indexDatabaseName());
 
-		await this.loadTransformersSettings(basePath);
-		await this.loadSettings();
-
-		this.store = new VectorStore(`${basePath}/${INDEX_FOLDER}`);
-		await this.store.initialize();
-
-		this.addRibbonIcon('search', 'Semantic Search', () => {
-			new SemanticSearchModal(this.app, this.store, this.settings).open();
-		});
-
-		this.addCommand({
-			id: 'semantic-search-open',
-			name: 'Open semantic search',
-			hotkeys: [{ modifiers: ['Mod', 'Shift'], key: 'o' }],
-			callback: () => {
-				new SemanticSearchModal(this.app, this.store, this.settings).open();
-			},
-		});
-
-		this.addCommand({
-			id: 'semantic-search-index-vault',
-			name: 'Index entire vault',
-			callback: async () => {
-				try {
-					await indexVault(this.app, this.store, this.settings);
-				} catch (err) {
-					new Notice(`Semantic Search: ${String(err)}`);
-					console.error('Semantic Search index-vault error:', err);
-				}
-			},
-		});
-
-		this.addCommand({
-			id: 'semantic-search-index-current',
-			name: 'Index current file',
-			checkCallback: (checking: boolean) => {
-				const file = this.app.workspace.getActiveFile();
-				if (!file || file.extension !== 'md') return false;
-				if (!checking) {
-					void this.indexSingleFile(file);
-				}
-				return true;
-			},
-		});
-
-		this.addCommand({
-			id: 'semantic-search-clear-index',
-			name: 'Clear index',
-			callback: async () => {
-				await this.store.clear();
-				new Notice('Semantic Search: index cleared.');
-			},
-		});
-
-		this.addCommand({
-			id: 'semantic-search-show-count',
-			name: 'Show indexed chunk count',
-			callback: async () => {
-				const count = await this.store.count();
-				new Notice(`Semantic Search: ${count} chunk${count === 1 ? '' : 's'} indexed.`);
-			},
-		});
-
-		// ── Auto-index on save ─────────────────────────────────────────────────
-		this.registerEvent(
-			this.app.vault.on('modify', async (file) => {
-				if (!this.settings.autoIndexOnSave) return;
-				if (!(file instanceof TFile) || file.extension !== 'md') return;
-				await this.indexSingleFile(file);
-			})
-		);
-
-		// ── Keep index in sync with file renames / deletions ──────────────────
-		this.registerEvent(
-			this.app.vault.on('delete', async (file) => {
-				if (!(file instanceof TFile) || file.extension !== 'md') return;
-				await removeFile(file.path, this.store);
-			})
-		);
-
-		this.registerEvent(
-			this.app.vault.on('rename', async (file, oldPath) => {
-				if (!(file instanceof TFile) || file.extension !== 'md') return;
-				await removeFile(oldPath, this.store);
-				if (this.settings.autoIndexOnSave) {
-					await indexFile(file, this.app, this.store, this.settings);
-				}
-			})
-		);
-
+		registerCommands(this);
 		this.addSettingTab(new SemanticSearchSettingTab(this.app, this));
+		this.addRibbonIcon('search', 'Open semantic search', () => new SemanticSearchModal(this).open());
+		this.addStatusBar();
+
+		this.app.workspace.onLayoutReady(() => {
+			// Registered after layout-ready so the vault's initial "create" events are skipped.
+			this.registerEvent(this.app.vault.on('create', file => this.index.handleCreateOrModify(file)));
+			this.registerEvent(this.app.vault.on('modify', file => this.index.handleCreateOrModify(file)));
+			this.registerEvent(this.app.vault.on('delete', file => this.index.handleDelete(file)));
+			this.registerEvent(this.app.vault.on('rename', (file, oldPath) => this.index.handleRename(file, oldPath)));
+			void this.catchUp();
+		});
 	}
 
-	onunload(): void {}
-
-	async loadSettings(): Promise<void> {
-		this.settings = Object.assign(
-			{},
-			DEFAULT_SETTINGS,
-			(await this.loadData()) as Partial<SemanticSearchSettings>
-		);
+	onunload(): void {
+		this.index.dispose();
 	}
 
 	async saveSettings(): Promise<void> {
 		await this.saveData(this.settings);
+		this.index.onSettingsChanged();
 	}
 
-	// ---------------------------------------------------------------------------
-	// Helpers
-	// ---------------------------------------------------------------------------
-
-	private async indexSingleFile(file: TFile): Promise<void> {
-		try {
-			await indexFile(file, this.app, this.store, this.settings);
-			new Notice(`Semantic Search: indexed "${file.basename}"`, 2000);
-		} catch (err) {
-			new Notice(`Semantic Search: failed to index "${file.basename}" — ${String(err)}`);
-			console.error('Semantic Search indexFile error:', err);
+	/** Index notes that changed while Obsidian was closed. Never triggers the first build. */
+	private async catchUp(): Promise<void> {
+		await this.index.load();
+		if (this.settings.autoIndex && this.index.availability() !== 'empty') {
+			await this.index.updateInBackground();
 		}
 	}
-	
-	async loadTransformersSettings(basePath: string): Promise<void> {
-		env.localModelPath = basePath + "/.model-cache/";
-		env.allowRemoteModels = true;
-		env.allowLocalModels = true;
 
-		env.useBrowserCache = false;
+	private addStatusBar(): void {
+		const el = this.addStatusBarItem();
+		el.addClass('semantic-search-status-bar', 'is-hidden');
+		this.registerEvent(this.index.onStatus(status => {
+			const text = describeStatus(status);
+			el.toggleClass('is-hidden', text === null);
+			el.toggleClass('mod-error', status.state === 'error');
+			el.setText(status.state === 'error' ? 'Semantic search: error' : `Semantic search: ${text ?? ''}`);
+			el.setAttr('aria-label', text ?? '');
+		}));
+	}
+
+	/** One IndexedDB database per vault, so each vault on this device has its own index. */
+	private indexDatabaseName(): string {
+		const appId = (this.app as unknown as { appId?: unknown }).appId;
+		const vaultKey = typeof appId === 'string' && appId ? appId : this.app.vault.getName();
+		return `${this.manifest.id}/index/${vaultKey}`;
 	}
 }

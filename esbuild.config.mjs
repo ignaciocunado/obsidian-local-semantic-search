@@ -1,6 +1,7 @@
 import esbuild from "esbuild";
 import process from "process";
 import { builtinModules } from 'node:module';
+import { inlineWorkerPlugin } from "./scripts/build-worker.mjs";
 
 const banner =
 `/*
@@ -41,6 +42,7 @@ const context = await esbuild.context({
 	treeShaking: true,
 	outfile: "main.js",
 	minify: prod,
+	plugins: [inlineWorkerPlugin({ minify: prod })],
 });
 
 if (prod) {
